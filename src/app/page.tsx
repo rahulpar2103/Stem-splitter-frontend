@@ -1,69 +1,218 @@
-import Image from "next/image";
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import UploadForm from "@/components/UploadForm";
+import ProgressView from "@/components/ProgressView";
+import ErrorView from "@/components/ErrorView";
+import ResultsView from "@/components/ResultsView";
+import RecentJobs from "@/components/RecentJobs";
+import { getJobStatus, submitUpload, submitYouTubeUrl } from "@/lib/api";
+import type { JobStatus, JobStatusResponse, KeyInfo } from "@/lib/types";
+
+type AppState = "input" | "processing" | "done" | "error";
+
+const POLL_INTERVAL_MS = 2500;
 
 export default function Home() {
+  const [appState, setAppState] = useState<AppState>("input");
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [jobStatus, setJobStatus] = useState<JobStatus>("queued");
+  const [sourceName, setSourceName] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [keyInfo, setKeyInfo] = useState<KeyInfo | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
+
+  const startPolling = useCallback((id: string) => {
+    if (pollRef.current) clearInterval(pollRef.current);
+
+    pollRef.current = setInterval(async () => {
+      try {
+        const status = await getJobStatus(id);
+        setJobStatus(status.status);
+
+        if (status.status === "done") {
+          if (pollRef.current) clearInterval(pollRef.current);
+          setKeyInfo(status.key_info || null);
+          setAppState("done");
+        } else if (status.status === "failed") {
+          if (pollRef.current) clearInterval(pollRef.current);
+          setErrorMessage(status.error || "An unknown error occurred.");
+          setAppState("error");
+        }
+      } catch {
+        // Don't crash on a single poll failure — just retry next interval
+      }
+    }, POLL_INTERVAL_MS);
+  }, []);
+
+  const handleSubmitFile = useCallback(
+    async (file: File) => {
+      setSubmitting(true);
+      try {
+        const id = await submitUpload(file);
+        setJobId(id);
+        setSourceName(file.name);
+        setJobStatus("queued");
+        setAppState("processing");
+        startPolling(id);
+      } catch (err) {
+        setErrorMessage(
+          err instanceof Error ? err.message : "Failed to upload file."
+        );
+        setAppState("error");
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [startPolling]
+  );
+
+  const handleSubmitUrl = useCallback(
+    async (url: string) => {
+      setSubmitting(true);
+      try {
+        const id = await submitYouTubeUrl(url);
+        setJobId(id);
+        setSourceName(url);
+        setJobStatus("queued");
+        setAppState("processing");
+        startPolling(id);
+      } catch (err) {
+        setErrorMessage(
+          err instanceof Error ? err.message : "Failed to submit YouTube URL."
+        );
+        setAppState("error");
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [startPolling]
+  );
+
+  const handleSelectRecentJob = useCallback((job: JobStatusResponse) => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    setJobId(job.id);
+    setSourceName(job.source_name);
+    setKeyInfo(job.key_info || null);
+    setJobStatus(job.status);
+    setAppState("done");
+  }, []);
+
+  const handleReset = useCallback(() => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    setAppState("input");
+    setJobId(null);
+    setJobStatus("queued");
+    setSourceName("");
+    setErrorMessage("");
+    setSubmitting(false);
+    setKeyInfo(null);
+  }, []);
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+    <main className="flex-1 flex flex-col">
+      {/* Header */}
+      <header className="border-b border-gray-100 px-6 py-4">
+        <div className="max-w-3xl mx-auto flex items-center justify-between">
+          <div className="flex items-center gap-3 cursor-pointer" onClick={handleReset}>
+            <svg
+              className="h-6 w-6 text-gray-800"
+              fill="none"
+              viewBox="0 0 24 24"
+              strokeWidth={1.5}
+              stroke="currentColor"
             >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="m9 9 10.5-3m0 6.553v3.75a2.25 2.25 0 0 1-1.632 2.163l-1.32.377a1.803 1.803 0 1 1-.99-3.467l2.31-.66a2.25 2.25 0 0 0 1.632-2.163Zm0 0V2.25L9 5.25v10.303m0 0v3.75a2.25 2.25 0 0 1-1.632 2.163l-1.32.377a1.803 1.803 0 0 1-.99-3.467l2.31-.66A2.25 2.25 0 0 0 9 15.553Z"
+              />
+            </svg>
+            <h1 className="text-base font-semibold text-gray-900">
+              Stem Splitter
+            </h1>
+          </div>
+          <div className="text-xs text-gray-400">
+            NVIDIA GPU / CPU Ready
+          </div>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
+      </header>
+
+      {/* Main content area */}
+      <div className="flex-1 flex flex-col items-center justify-center px-6 py-10">
+        {appState === "input" && (
+          <div className="w-full space-y-8">
+            <div className="text-center space-y-2">
+              <h2 className="text-2xl font-semibold text-gray-900">
+                Split audio into stems
+              </h2>
+              <p className="text-sm text-gray-500 max-w-md mx-auto">
+                Upload an audio or video file, or paste a YouTube link.
+                The audio will be separated into vocals, drums, bass, guitar, piano, and other.
+              </p>
+            </div>
+            <UploadForm
+              onSubmitFile={handleSubmitFile}
+              onSubmitUrl={handleSubmitUrl}
+              disabled={submitting}
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+
+            {/* Recent / Saved tracks library */}
+            <RecentJobs
+              onSelectJob={handleSelectRecentJob}
+              onDeleteActiveJob={handleReset}
+              activeJobId={jobId}
+            />
+          </div>
+        )}
+
+        {appState === "processing" && (
+          <ProgressView status={jobStatus} sourceName={sourceName} />
+        )}
+
+        {appState === "done" && jobId && (
+          <div className="w-full space-y-8">
+            <ResultsView
+              jobId={jobId}
+              sourceName={sourceName}
+              keyInfo={keyInfo}
+              onNewJob={handleReset}
+              onRename={(newName) => setSourceName(newName)}
+            />
+            <RecentJobs
+              onSelectJob={handleSelectRecentJob}
+              onDeleteActiveJob={handleReset}
+              activeJobId={jobId}
+            />
+          </div>
+        )}
+
+        {appState === "error" && (
+          <div className="w-full space-y-8">
+            <ErrorView message={errorMessage} onRetry={handleReset} />
+            <RecentJobs
+              onSelectJob={handleSelectRecentJob}
+              onDeleteActiveJob={handleReset}
+              activeJobId={jobId}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Footer */}
+      <footer className="border-t border-gray-100 px-6 py-3">
+        <p className="text-center text-xs text-gray-400">
+          Powered by Demucs · htdemucs_6s model
+        </p>
+      </footer>
+    </main>
   );
 }
